@@ -1,0 +1,12 @@
+# Ignore test directories everywhere
+**/tests/
+**/benchmarks/
+**/.pcc/
+**/grading/
+
+# Ignore compiled files
+**/cp
+**/*.dSYM/
+
+# Keep only the source files
+!**/cp.cc
