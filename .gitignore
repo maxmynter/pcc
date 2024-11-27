@@ -1,12 +1,19 @@
 # Ignore test directories everywhere
 **/tests/
 **/benchmarks/
-**/.pcc/
+**/.ppc/
 **/grading/
+**/.gitignore
+**/grading
 
-# Ignore compiled files
-**/cp
+# Ignore compiled binaries (using exact matching)
+**/cp$
+**/cp[0-9]$
+**/cp[0-9][a-z]$
+**/mf$
+**/mf[0-9]$
+**/mf[0-9][a-z]$
 **/*.dSYM/
 
-# Keep only the source files
-!**/cp.cc
+# Keep all source files
+!**/*.cc
