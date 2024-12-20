@@ -197,5 +197,5 @@ void correlate(const int ny, int nx, const float *data, float *result) {
       }
     }
   }
-  std::free(vd);
+  free(vd);
 }
