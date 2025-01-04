@@ -11,107 +11,117 @@ struct Result {
   float inner[3];
 };
 
-// Helper function to compute cumulative sums
-std::vector<std::array<double, 3>> compute_cumsum(const float *data, int ny,
-                                                  int nx) {
-  std::vector<std::array<double, 3>> cumsum((ny + 1) * (nx + 1));
+// Precompute sums for all possible rectangles
+void compute_prefix_sums(const float *data, int ny, int nx,
+                         std::vector<std::array<double, 3>> &prefix_sum,
+                         std::vector<std::array<double, 3>> &prefix_sum_sq) {
+  prefix_sum.resize((ny + 1) * (nx + 1));
+  prefix_sum_sq.resize((ny + 1) * (nx + 1));
 
-  // Initialize first row and column to 0
+  // Initialize first row and column
   for (int i = 0; i <= nx; i++) {
-    cumsum[i] = {0, 0, 0};
+    prefix_sum[i].fill(0);
+    prefix_sum_sq[i].fill(0);
   }
-  for (int i = 0; i <= ny; i++) {
-    cumsum[i * (nx + 1)] = {0, 0, 0};
+  for (int i = 1; i <= ny; i++) {
+    prefix_sum[i * (nx + 1)].fill(0);
+    prefix_sum_sq[i * (nx + 1)].fill(0);
   }
 
-  // Compute cumulative sum
-  for (int y = 1; y <= ny; y++) {
-    for (int x = 1; x <= nx; x++) {
+  // Compute 2D prefix sums for both values and squared values
+  for (int y = 0; y < ny; y++) {
+    for (int x = 0; x < nx; x++) {
+      int idx = (y + 1) * (nx + 1) + (x + 1);
+      int data_idx = 3 * (x + nx * y);
+
       for (int c = 0; c < 3; c++) {
-        cumsum[y * (nx + 1) + x][c] =
-            cumsum[(y - 1) * (nx + 1) + x][c] +
-            cumsum[y * (nx + 1) + (x - 1)][c] -
-            cumsum[(y - 1) * (nx + 1) + (x - 1)][c] +
-            static_cast<double>(data[c + 3 * (x - 1) + 3 * nx * (y - 1)]);
+        double val = static_cast<double>(data[data_idx + c]);
+        double sq = val * val;
+
+        prefix_sum[idx][c] = val + prefix_sum[(y + 1) * (nx + 1) + x][c] +
+                             prefix_sum[y * (nx + 1) + (x + 1)][c] -
+                             prefix_sum[y * (nx + 1) + x][c];
+
+        prefix_sum_sq[idx][c] = sq + prefix_sum_sq[(y + 1) * (nx + 1) + x][c] +
+                                prefix_sum_sq[y * (nx + 1) + (x + 1)][c] -
+                                prefix_sum_sq[y * (nx + 1) + x][c];
       }
     }
   }
-  return cumsum;
 }
 
-// Helper function to get sum of a rectangle
-std::array<double, 3>
-get_rect_sum(const std::vector<std::array<double, 3>> &cumsum, int x0, int y0,
-             int x1, int y1, int nx) {
-  std::array<double, 3> sum;
+// Get sum and sum of squares for a rectangle using prefix sums
+inline void
+get_rect_sums(const std::vector<std::array<double, 3>> &prefix_sum,
+              const std::vector<std::array<double, 3>> &prefix_sum_sq, int x0,
+              int y0, int x1, int y1, int nx, std::array<double, 3> &sums,
+              std::array<double, 3> &sum_squares) {
   for (int c = 0; c < 3; c++) {
-    sum[c] = cumsum[y1 * (nx + 1) + x1][c] - cumsum[y1 * (nx + 1) + x0][c] -
-             cumsum[y0 * (nx + 1) + x1][c] + cumsum[y0 * (nx + 1) + x0][c];
+    sums[c] =
+        prefix_sum[y1 * (nx + 1) + x1][c] - prefix_sum[y1 * (nx + 1) + x0][c] -
+        prefix_sum[y0 * (nx + 1) + x1][c] + prefix_sum[y0 * (nx + 1) + x0][c];
+
+    sum_squares[c] = prefix_sum_sq[y1 * (nx + 1) + x1][c] -
+                     prefix_sum_sq[y1 * (nx + 1) + x0][c] -
+                     prefix_sum_sq[y0 * (nx + 1) + x1][c] +
+                     prefix_sum_sq[y0 * (nx + 1) + x0][c];
   }
-  return sum;
 }
 
 Result segment(int ny, int nx, const float *data) {
   Result result{0, 0, 0, 0, {0, 0, 0}, {0, 0, 0}};
   double best_error = std::numeric_limits<double>::infinity();
 
-  // Precompute cumulative sums
-  auto cumsum = compute_cumsum(data, ny, nx);
+  // Precompute sums
+  std::vector<std::array<double, 3>> prefix_sum, prefix_sum_sq;
+  compute_prefix_sums(data, ny, nx, prefix_sum, prefix_sum_sq);
 
   // Get total sums
-  auto total = get_rect_sum(cumsum, 0, 0, nx, ny, nx);
-  int n_total = nx * ny;
+  std::array<double, 3> total_sums, total_sum_squares;
+  get_rect_sums(prefix_sum, prefix_sum_sq, 0, 0, nx, ny, nx, total_sums,
+                total_sum_squares);
+  const int total_pixels = nx * ny;
+
+  // Temporary arrays for inner and outer sums
+  std::array<double, 3> inner_sums, inner_sum_squares;
 
   // Try all possible rectangles
   for (int y0 = 0; y0 < ny; y0++) {
     for (int y1 = y0 + 1; y1 <= ny; y1++) {
       for (int x0 = 0; x0 < nx; x0++) {
         for (int x1 = x0 + 1; x1 <= nx; x1++) {
-          // Get inner rectangle sums
-          auto inner = get_rect_sum(cumsum, x0, y0, x1, y1, nx);
-          std::array<double, 3> outer;
+          const int inner_pixels = (x1 - x0) * (y1 - y0);
+          const int outer_pixels = total_pixels - inner_pixels;
 
-          int n_inner = (x1 - x0) * (y1 - y0);
-          int n_outer = n_total - n_inner;
+          if (inner_pixels == 0 || outer_pixels == 0)
+            continue;
 
-          // Compute means
-          std::array<double, 3> inner_means, outer_means;
+          // Get sums for inner rectangle
+          get_rect_sums(prefix_sum, prefix_sum_sq, x0, y0, x1, y1, nx,
+                        inner_sums, inner_sum_squares);
+
           double total_error = 0;
 
+          // Calculate error in one pass
           for (int c = 0; c < 3; c++) {
-            outer[c] = total[c] - inner[c];
-            inner_means[c] = inner[c] / n_inner;
-            outer_means[c] = outer[c] / n_outer;
-          }
+            // Inner rectangle error
+            const double inner_mean = inner_sums[c] / inner_pixels;
+            double inner_error = inner_sum_squares[c] -
+                                 2 * inner_mean * inner_sums[c] +
+                                 inner_pixels * inner_mean * inner_mean;
 
-          // Compute errors efficiently using sum of squares formula
-          for (int c = 0; c < 3; c++) {
-            double inner_sum_sq = 0;
-            double outer_sum_sq = 0;
-
-            for (int y = y0; y < y1; y++) {
-              for (int x = x0; x < x1; x++) {
-                double val = data[c + 3 * x + 3 * nx * y];
-                inner_sum_sq += val * val;
-              }
-            }
-
-            double inner_error = inner_sum_sq - 2 * inner_means[c] * inner[c] +
-                                 n_inner * inner_means[c] * inner_means[c];
-
-            for (int y = 0; y < ny; y++) {
-              for (int x = 0; x < nx; x++) {
-                if (x >= x0 && x < x1 && y >= y0 && y < y1)
-                  continue;
-                double val = data[c + 3 * x + 3 * nx * y];
-                outer_sum_sq += val * val;
-              }
-            }
-
-            double outer_error = outer_sum_sq - 2 * outer_means[c] * outer[c] +
-                                 n_outer * outer_means[c] * outer_means[c];
+            // Outer rectangle error
+            const double outer_sum = total_sums[c] - inner_sums[c];
+            const double outer_sum_sq =
+                total_sum_squares[c] - inner_sum_squares[c];
+            const double outer_mean = outer_sum / outer_pixels;
+            double outer_error = outer_sum_sq - 2 * outer_mean * outer_sum +
+                                 outer_pixels * outer_mean * outer_mean;
 
             total_error += inner_error + outer_error;
+
+            if (total_error >= best_error)
+              goto next_rectangle;
           }
 
           if (total_error < best_error) {
@@ -120,11 +130,16 @@ Result segment(int ny, int nx, const float *data) {
             result.y0 = y0;
             result.x1 = x1;
             result.y1 = y1;
+
             for (int c = 0; c < 3; c++) {
-              result.inner[c] = static_cast<float>(inner_means[c]);
-              result.outer[c] = static_cast<float>(outer_means[c]);
+              result.inner[c] =
+                  static_cast<float>(inner_sums[c] / inner_pixels);
+              result.outer[c] = static_cast<float>(
+                  (total_sums[c] - inner_sums[c]) / outer_pixels);
             }
           }
+
+        next_rectangle:;
         }
       }
     }
